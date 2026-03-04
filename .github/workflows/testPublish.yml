@@ -1,0 +1,32 @@
+name: Test Publishing Setup
+
+on:
+  # Allows you to trigger this workflow manually from the GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  test-publish:
+    name: Test Publishing Configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21' # Update this to match your project's Java version
+          distribution: 'zulu'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Dry Run - Publish to Maven Local
+        # publishToMavenLocal builds the artifact, runs the signing tasks,
+        # and publishes to the local runner directory instead of the remote server.
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.OSSRH_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.OSSRH_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+        run: ./gradlew :adaptive-grid:publishToMavenLocal --max-workers 1 --stacktrace
