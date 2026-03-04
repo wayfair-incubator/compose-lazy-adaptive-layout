@@ -61,12 +61,12 @@ mavenPublishing {
     pom {
         name.set("LazyAdaptiveLayout")
         description.set("A high-performance, customizable adaptive grid layout for Android Jetpack Compose")
-        url.set("https://github.com/wayfair/compose-lazy-adaptive-layout")
+        url.set("https://github.com/wayfair-incubator/compose-lazy-adaptive-layout")
         
         scm {
-            connection.set("scm:git:git://github.com/wayfair/compose-lazy-adaptive-layout.git")
-            developerConnection.set("scm:git:ssh://github.com/wayfair/compose-lazy-adaptive-layout.git")
-            url.set("https://github.com/wayfair/compose-lazy-adaptive-layout")
+            connection.set("scm:git:git://github.com/wayfair-incubator/compose-lazy-adaptive-layout.git")
+            developerConnection.set("scm:git:ssh://github.com/wayfair-incubator/compose-lazy-adaptive-layout.git")
+            url.set("https://github.com/wayfair-incubator/compose-lazy-adaptive-layout")
         }
     }
 }

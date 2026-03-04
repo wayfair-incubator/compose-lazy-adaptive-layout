@@ -14,7 +14,7 @@ any real-time space (eg. Slack, Discord, etc).
 ## Reporting Issues
 
 Before reporting a new issue, please ensure that the issue was not already reported or fixed by searching through our
-[issues list](https://github.com/wayfair/compose-lazy-adaptive-layout/issues).
+[issues list](https://github.com/wayfair-incubator/compose-lazy-adaptive-layout/issues).
 
 When creating a new issue, please be sure to include a **title and clear description**, as much relevant information as
 possible, and, if possible, a test case.
