@@ -104,6 +104,8 @@ data class GridItem<T>(
  * Similar to LazyListLayoutInfo but designed for grid layouts.
  * 
  * @param visibleItemsInfo List of information about visible items
+ * @param firstVisibleItem The scroll anchor item (see [AdaptiveGridState.firstVisibleItemIndex]).
+ *   Prefer this over [visibleItemsInfo].firstOrNull() for overlay/parallax scroll metrics.
  * @param viewportStartOffset The start offset of the viewport in pixels
  * @param viewportEndOffset The end offset of the viewport in pixels
  * @param totalItemsCount Total number of items in the grid
@@ -113,6 +115,7 @@ data class GridItem<T>(
 @Immutable
 data class AdaptiveGridLayoutInfo(
     val visibleItemsInfo: List<AdaptiveGridItemInfo>,
+    val firstVisibleItem: AdaptiveGridItemInfo? = null,
     val viewportStartOffset: Int,
     val viewportEndOffset: Int,
     val totalItemsCount: Int,

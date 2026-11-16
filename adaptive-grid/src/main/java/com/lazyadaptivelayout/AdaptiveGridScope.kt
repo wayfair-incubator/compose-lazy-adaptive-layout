@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import com.lazyadaptivelayout.model.ContentPadding
 import com.lazyadaptivelayout.model.EdgeSpacing
 import com.lazyadaptivelayout.model.GridItemType
@@ -278,6 +279,7 @@ class AdaptiveGridScopeImpl<T> : AdaptiveGridScope<T> {
     ): @Composable (T, Int, Int, Int) -> Unit {
         return { item, index, columnIndex, columns ->
             val config = LocalGridItemConfig.current
+            val measureInvalidator = LocalAdaptiveGridMeasureInvalidator.current
 
             val (startPadding, endPadding, topPadding, bottomPadding) = computeItemPaddings(
                 type = config.type,
@@ -305,6 +307,13 @@ class AdaptiveGridScopeImpl<T> : AdaptiveGridScope<T> {
                             Modifier.height(finalHeight)
                         else
                             Modifier.wrapContentHeight()
+                    )
+                    .then(
+                        if (measureInvalidator != null) {
+                            Modifier.onSizeChanged { measureInvalidator.invalidateScope() }
+                        } else {
+                            Modifier
+                        }
                     )
             ) {
                 content(

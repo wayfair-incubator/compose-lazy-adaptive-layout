@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 internal class AdaptiveGridScrollDeltaBetweenPasses {
 
     internal val scrollDeltaBetweenPasses: Float
-        get() = _scrollDeltaBetweenPasses.value
+        get() = _scrollDeltaBetweenPasses.value.sanitizeForAnimation()
 
     internal var job: Job? = null
 
@@ -36,18 +36,23 @@ internal class AdaptiveGridScrollDeltaBetweenPasses {
         density: Density,
         coroutineScope: CoroutineScope,
     ) {
-        if (delta <= with(density) { DeltaThresholdForScrollAnimation.toPx() }) {
+        val sanitizedDelta = delta.sanitizeForAnimation()
+        if (
+            sanitizedDelta <= 0f ||
+            sanitizedDelta <= with(density) { DeltaThresholdForScrollAnimation.toPx() }
+        ) {
             return
         }
 
         Snapshot.withoutReadObservation {
-            val currentDelta = _scrollDeltaBetweenPasses.value
+            val currentDelta = _scrollDeltaBetweenPasses.value.sanitizeForAnimation()
 
             job?.cancel()
             if (_scrollDeltaBetweenPasses.isRunning) {
-                _scrollDeltaBetweenPasses = _scrollDeltaBetweenPasses.copy(currentDelta - delta)
+                val updatedDelta = (currentDelta - sanitizedDelta).sanitizeForAnimation()
+                _scrollDeltaBetweenPasses = _scrollDeltaBetweenPasses.copy(updatedDelta)
             } else {
-                _scrollDeltaBetweenPasses = AnimationState(Float.VectorConverter, -delta)
+                _scrollDeltaBetweenPasses = AnimationState(Float.VectorConverter, -sanitizedDelta)
             }
             job =
                 coroutineScope.launch {
@@ -67,4 +72,11 @@ internal class AdaptiveGridScrollDeltaBetweenPasses {
 }
 
 private val DeltaThresholdForScrollAnimation = 1.dp
+
+/** Compose animations crash when animating to/from NaN or Infinity. */
+private fun Float.sanitizeForAnimation(): Float =
+    when {
+        isNaN() || isInfinite() -> 0f
+        else -> this
+    }
 

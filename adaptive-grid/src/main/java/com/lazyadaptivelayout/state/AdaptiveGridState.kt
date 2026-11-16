@@ -83,6 +83,12 @@ class AdaptiveGridState(
     internal var remeasurement: Remeasurement? = null
         private set
 
+    /**
+     * The provider backing the current grid content. Used to resolve item keys to indices for
+     * [scrollToItemByKey]/[animateScrollToItemByKey]. Set during the measure pass.
+     */
+    internal var layoutProvider: GridLayoutProvider<*>? = null
+
     internal val remeasurementModifier =
         object : RemeasurementModifier {
             override fun onRemeasurementAvailable(remeasurement: Remeasurement) {
@@ -147,6 +153,14 @@ class AdaptiveGridState(
     val visibleItemsInfo: List<AdaptiveGridItemInfo> by derivedStateOf {
         layoutInfo.visibleItemsInfo
     }
+
+    /**
+     * The scroll-anchor item for the current viewport. Prefer this over [visibleItemsInfo].firstOrNull()
+     * when computing overlay scroll metrics — it remains stable even when the anchor item is
+     * partially scrolled off or not yet intersecting the viewport.
+     */
+    val firstVisibleItemInfo: AdaptiveGridItemInfo?
+        @FrequentlyChangingValue get() = layoutInfo.firstVisibleItem
 
     val isScrolledToEnd: Boolean by derivedStateOf {
         layoutInfo.totalItemsCount > 0 &&
@@ -284,6 +298,36 @@ class AdaptiveGridState(
         }
     }
 
+    /**
+     * Resolves [key] to its current item index and instantly scrolls so that item is at the top of
+     * the viewport, offset by [scrollOffset] pixels.
+     *
+     * Prefer this over [scrollToItem] when the caller's data indices may not match the grid's
+     * flattened item indices (e.g. when groups, headers, or paged segments are flattened into the
+     * grid). The [key] must match the key supplied for the item in the grid content.
+     *
+     * @return true if the key was found and a scroll was performed, false otherwise.
+     */
+    suspend fun scrollToItemByKey(key: Any, scrollOffset: Int = 0): Boolean {
+        val index = layoutProvider?.getIndex(key) ?: -1
+        if (index < 0) return false
+        scrollToItem(index, scrollOffset)
+        return true
+    }
+
+    /**
+     * Resolves [key] to its current item index and animates (smooth scroll) so that item is at the
+     * top of the viewport, offset by [scrollOffset] pixels. See [scrollToItemByKey].
+     *
+     * @return true if the key was found and a scroll was performed, false otherwise.
+     */
+    suspend fun animateScrollToItemByKey(key: Any, scrollOffset: Int = 0): Boolean {
+        val index = layoutProvider?.getIndex(key) ?: -1
+        if (index < 0) return false
+        animateScrollToItem(index, scrollOffset)
+        return true
+    }
+
     /** Updates the state with the new calculated scroll position and consumed scroll. */
     internal fun applyMeasureResult(
         result: AdaptiveGridMeasureResult,
@@ -330,6 +374,15 @@ class AdaptiveGridState(
                     result.density,
                     result.coroutineScope,
                 )
+            }
+
+            if (result.remeasureNeeded && !isLookingAhead) {
+                // Schedule a remeasure for the next frame rather than forcing one synchronously.
+                // applyMeasureResult runs inside the measure pass, and forceRemeasure() there throws
+                // "performMeasureAndLayout called during measure layout". Invalidating the
+                // measurement scope (read via attachToScope() at the start of the measure block)
+                // re-runs measurement on the next frame with the updated item heights.
+                measurementScopeInvalidator.invalidateScope()
             }
         }
     }

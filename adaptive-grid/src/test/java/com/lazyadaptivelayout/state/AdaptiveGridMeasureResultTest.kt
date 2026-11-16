@@ -111,6 +111,7 @@ class AdaptiveGridMeasureResultTest {
 
         assertSame(info1, info2)
         assertEquals(items, info1.visibleItemsInfo)
+        assertEquals(items.first(), info1.firstVisibleItem)
         assertEquals(5, info1.viewportStartOffset)
         assertEquals(105, info1.viewportEndOffset)
         assertEquals(10, info1.totalItemsCount)
@@ -236,7 +237,8 @@ class AdaptiveGridMeasureResultTest {
         assertEquals(0, updated.firstVisibleItemScrollOffset)
         assertEquals(30f, updated.consumedScroll)
         assertTrue(updated.canScrollForward)
-        assertSame(r.firstVisibleItem, updated.firstVisibleItem)
+        assertEquals(100 - 30, updated.firstVisibleItem?.offset)
+        assertEquals(100 - 30, updated.firstVisibleItem?.position?.y)
     }
 
     @Test

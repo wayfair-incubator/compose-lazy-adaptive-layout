@@ -25,9 +25,11 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.util.fastRoundToInt
+import kotlin.math.abs
+import kotlin.math.sign
 import com.lazyadaptivelayout.layout.clearMeasurementCaches
-import com.lazyadaptivelayout.layout.measureFlattenedGrid
 import com.lazyadaptivelayout.layout.notifyDataVersion
+import com.lazyadaptivelayout.layout.collapsedZeroHeightVisibleIndices
 import com.lazyadaptivelayout.model.AdaptiveGridItemInfo
 import com.lazyadaptivelayout.model.GridItem
 import com.lazyadaptivelayout.model.GridItemConfig
@@ -41,6 +43,9 @@ import com.lazyadaptivelayout.state.AdaptiveGridState
 val LocalGridItemConfig = staticCompositionLocalOf<GridItemConfig> {
     error("LocalGridItemConfig not provided")
 }
+
+internal val LocalAdaptiveGridMeasureInvalidator =
+    staticCompositionLocalOf<com.lazyadaptivelayout.layout.ObservableScopeInvalidator?> { null }
 
 @Composable
 /** Returns a remembered [AdaptiveGridState] suitable for use with LazyAdaptiveGrid. */
@@ -179,9 +184,8 @@ fun <T> LazyAdaptiveGrid(
         31 * acc + enrichedItems.size
     }
 
-    val measuredHeights = remember(dataVersion) {
-        mutableMapOf<Int, Int>()
-    }
+    val heightCache = remember { MeasuredHeightCache() }
+    val measuredHeights = heightCache.heights
 
     val positionsState = remember {
         mutableStateOf<List<ItemPosition>>(emptyList())
@@ -201,15 +205,16 @@ fun <T> LazyAdaptiveGrid(
 
     val getCachedWidth = remember {
         { config: GridItemConfig, groupColumns: Int, maxWidth: Int ->
-            val key = "${config.type}_${groupColumns}_${maxWidth}"
+            val safeColumns = groupColumns.coerceAtLeast(1)
+            val key = "${config.type}_${safeColumns}_${maxWidth}"
             widthCache.getOrPut(key) {
                 when (val gridType = config.type) {
                     is GridItemType.FullWidth -> maxWidth
                     is GridItemType.Custom -> {
-                        val spans = minOf(gridType.spans, groupColumns)
-                        (maxWidth / groupColumns) * spans
+                        val spans = minOf(gridType.spans, safeColumns)
+                        (maxWidth / safeColumns) * spans
                     }
-                    else -> maxWidth / groupColumns
+                    else -> maxWidth / safeColumns
                 }
             }
         }
@@ -243,7 +248,6 @@ fun <T> LazyAdaptiveGrid(
         if (dataVersion != lastDataVersion.value) {
             notifyDataVersion(dataVersion)
             lastDataVersion.value = dataVersion
-            measuredHeights.clear()
         }
     }
 
@@ -263,6 +267,7 @@ fun <T> LazyAdaptiveGrid(
 
             val hasLookaheadOccurred = state.hasLookaheadOccurred || isLookingAhead
             val itemProvider = layoutProvider
+            state.layoutProvider = layoutProvider
 
             val firstVisibleItemIndex: Int
             val firstVisibleItemScrollOffset: Int
@@ -308,37 +313,41 @@ fun <T> LazyAdaptiveGrid(
                 currentFirstItemScrollOffset = 0
             }
 
-            val lastMeasuredIndex = state._itemPositions.indexOfLast { it.height > 0 }
-            val rangeStartIndex = if (lastMeasuredIndex >= 0) {
-                minOf(currentFirstItemIndex, lastMeasuredIndex)
-            } else {
-                currentFirstItemIndex
-            }
-            val visibleRange = calculateVisibleRangeFromRelativePosition(
-                firstVisibleItemIndex = rangeStartIndex,
-                firstVisibleItemScrollOffset = currentFirstItemScrollOffset,
-                itemCount = itemsCount,
-                bufferSize = bufferSize,
-                viewportHeight = constraints.maxHeight,
-                lastMeasuredIndex = lastMeasuredIndex,
-            )
-
-            val (placeables, itemHeights, heightChanges) = measureGridItems(
+            val measurer: (Int, Constraints) -> List<Placeable> =
+                { index, constraints -> compose(index).map { it.measure(constraints) } }
+            val pass = measureWindow(
                 layoutProvider = layoutProvider,
                 enrichedItems = enrichedItems,
-                visibleRange = visibleRange,
-                measuredHeights = measuredHeights,
+                heightCache = heightCache,
+                previousPositions = state._itemPositions,
+                anchorIndex = currentFirstItemIndex,
                 constraints = constraints,
-                measurer = { index, constraints -> compose(index).map { it.measure(constraints) } },
+                density = density,
                 bufferSize = bufferSize,
-                getCachedWidth = getCachedWidth
+                measurer = measurer,
+                getCachedWidth = getCachedWidth,
             )
-
-            val currentPositions = measureFlattenedGrid(enrichedItems, itemHeights, constraints, density)
+            val placeables = pass.placeables
+            val heightChanges = pass.heightChanges
+            val currentPositions = pass.positions
+            val measuredEnd = pass.measuredEnd
             positionsState.value = currentPositions
             state._itemPositions = currentPositions
 
-            currentPositions.maxOfOrNull { it.y + it.height } ?: 0
+            // Every item up to the end of the list has been visited. Until then the end of the content is
+            // unknown rather than reached.
+            val allItemsDiscovered = measuredEnd >= itemsCount - 1
+            val preScrollBackScrollDelta = scrollDelta
+            val scrollBack = scrollBackToContent(
+                positions = currentPositions,
+                anchorIndex = currentFirstItemIndex,
+                anchorScrollOffset = currentFirstItemScrollOffset,
+                scrollDelta = scrollDelta,
+                viewportHeight = constraints.maxHeight,
+                contentFullyDiscovered = allItemsDiscovered,
+            )
+            currentFirstItemScrollOffset = scrollBack.firstItemScrollOffset
+            scrollDelta = scrollBack.scrollDelta
 
             val firstItemPosition = currentPositions.getOrNull(currentFirstItemIndex)
             val viewportStart = if (firstItemPosition != null) {
@@ -350,66 +359,131 @@ fun <T> LazyAdaptiveGrid(
             val visibleItemsInfo = mutableListOf<AdaptiveGridItemInfo>()
 
             currentPositions.forEachIndexed { index, position ->
+                if (position.x == 0 && position.y == 0 && position.width == 0 && position.height == 0) return@forEachIndexed
+                val normalizedSize = normalizedItemSize(index, position, measuredHeights)
                 val itemTop = position.y
-                val itemBottom = position.y + position.height
+                val itemBottom = position.y + normalizedSize
 
                 if (itemBottom >= viewportStart && itemTop <= viewportEnd) {
-                    val key = enrichedItems.getOrNull(index)?.key ?: index
                     visibleItemsInfo.add(
-                        AdaptiveGridItemInfo(
+                        buildAdaptiveGridItemInfo(
                             index = index,
-                            key = key,
-                            offset = itemTop - viewportStart,
-                            size = position.height,
                             position = position,
-                            layoutType = enrichedItems.getOrNull(index)?.config?.type
-                                ?: GridItemType.Staggered
+                            normalizedSize = normalizedSize,
+                            viewportStart = viewportStart,
+                            enrichedItems = enrichedItems,
                         )
                     )
                 }
             }
 
-            val firstVisibleItem = if (currentFirstItemIndex in 0 until itemsCount) {
-                val firstItemPosition = currentPositions.getOrNull(currentFirstItemIndex)
-                if (firstItemPosition != null && firstItemPosition.height > 0) {
-                    val key = enrichedItems.getOrNull(currentFirstItemIndex)?.key ?: currentFirstItemIndex
-                    AdaptiveGridItemInfo(
-                        index = currentFirstItemIndex,
-                        key = key,
-                        offset = firstItemPosition.y - viewportStart,
-                        size = firstItemPosition.height,
-                        position = firstItemPosition,
-                        layoutType = enrichedItems.getOrNull(currentFirstItemIndex)?.config?.type
-                            ?: GridItemType.Staggered
-                    )
+            val firstVisibleItem =
+                if (currentFirstItemIndex in 0 until itemsCount) {
+                    currentPositions.getOrNull(currentFirstItemIndex)?.let { firstItemPosition ->
+                        buildAdaptiveGridItemInfo(
+                            index = currentFirstItemIndex,
+                            position = firstItemPosition,
+                            normalizedSize = normalizedItemSize(
+                                currentFirstItemIndex,
+                                firstItemPosition,
+                                measuredHeights,
+                            ),
+                            viewportStart = viewportStart,
+                            enrichedItems = enrichedItems,
+                        )
+                    }
                 } else {
-                    // If currentFirstItemIndex position is not available, use first visible item
-                    visibleItemsInfo.firstOrNull()
+                    null
                 }
-            } else {
-                // If currentFirstItemIndex is out of bounds, use first visible item
-                visibleItemsInfo.firstOrNull()
-            }
+
+            val mergedVisibleItemsInfo =
+                if (firstVisibleItem != null) {
+                    val merged = visibleItemsInfo.toMutableList()
+                    val existingIndex = merged.indexOfFirst { it.index == firstVisibleItem.index }
+                    if (existingIndex >= 0) {
+                        merged[existingIndex] = firstVisibleItem
+                    } else {
+                        merged.add(firstVisibleItem)
+                    }
+                    merged.sortedBy { it.index }
+                } else {
+                    visibleItemsInfo
+                }
 
             val finalFirstVisibleItemScrollOffset = currentFirstItemScrollOffset
 
-            val consumedScroll = scrollDelta.toFloat()
-            val scrollBackAmount = 0f // Can be calculated if needed - for now simplified
+            val consumedScroll =
+                if (
+                    scrollToBeConsumed.fastRoundToInt().sign == scrollDelta.sign &&
+                    abs(scrollToBeConsumed.fastRoundToInt()) >= abs(scrollDelta)
+                ) {
+                    scrollDelta.toFloat()
+                } else {
+                    scrollToBeConsumed
+                }
+            val unconsumedScroll = scrollToBeConsumed - consumedScroll
+            val scrollBackAmount =
+                if (isLookingAhead && scrollDelta > preScrollBackScrollDelta && unconsumedScroll <= 0f) {
+                    (scrollDelta - preScrollBackScrollDelta + unconsumedScroll).coerceAtLeast(0f)
+                } else {
+                    0f
+                }
 
+            // Items that have not been visited yet are unknown, not empty: the grid only discovers the
+            // heights of items as far ahead of the viewport as it needs. Reporting false before the end
+            // of the list is reached makes AdaptiveGridState.onScroll drop forward drags, so nothing
+            // would ever measure the rest. Once every item has been visited only the geometric answer
+            // counts (trailing zero-height anchors do not extend the content).
             val canScrollForward = if (itemsCount > 0) {
                 val lastMeasuredIndex = currentPositions.indexOfLast { it.height > 0 }
-                val hasMoreItems = lastMeasuredIndex >= 0 && lastMeasuredIndex < itemsCount - 1
-                if (hasMoreItems) {
-                    true
-                } else if (lastMeasuredIndex >= 0) {
-                    val lastItem = currentPositions[lastMeasuredIndex]
-                    lastItem.y + lastItem.height > viewportEnd
+                if (lastMeasuredIndex < 0) {
+                    !allItemsDiscovered
                 } else {
-                    itemsCount > 0
+                    val lastItem = currentPositions[lastMeasuredIndex]
+                    val lastItemBottom =
+                        lastItem.y +
+                            normalizedItemSize(lastMeasuredIndex, lastItem, measuredHeights)
+                    lastItemBottom > viewportEnd || !allItemsDiscovered
                 }
             } else {
                 false
             }
+
+            // Zero-height anchors (secondary fetch, pagination) never intersect the viewport but must
+            // be reported in visibleItemsInfo so consumers can trigger fetches when their index is
+            // reached. Anchors that were visited right after the last item with a height are included;
+            // trailing anchors are included once every item has been visited.
+            val finalVisibleItemsInfo =
+                collapsedZeroHeightVisibleIndices(
+                    lastGeometricVisibleIndex = mergedVisibleItemsInfo.lastOrNull()?.index ?: -1,
+                    measureWindowEnd = measuredEnd,
+                    itemsCount = itemsCount,
+                    measureWindowReachedEnd = allItemsDiscovered,
+                    effectiveHeightAt = { index ->
+                        val position = currentPositions.getOrNull(index)
+                        if (position == null) Int.MAX_VALUE
+                        else normalizedItemSize(index, position, measuredHeights)
+                    },
+                ).let { collapsedIndices ->
+                    if (collapsedIndices.isEmpty()) {
+                        mergedVisibleItemsInfo
+                    } else {
+                        val augmented = mergedVisibleItemsInfo.toMutableList()
+                        for (index in collapsedIndices) {
+                            val position = currentPositions.getOrNull(index) ?: continue
+                            augmented.add(
+                                buildAdaptiveGridItemInfo(
+                                    index = index,
+                                    position = position,
+                                    normalizedSize = 0,
+                                    viewportStart = viewportStart,
+                                    enrichedItems = enrichedItems,
+                                )
+                            )
+                        }
+                        augmented
+                    }
+                }
 
             val measureResult = layout(constraints.maxWidth, constraints.maxHeight) {
                 LazySimplePlacementScope(
@@ -417,8 +491,12 @@ fun <T> LazyAdaptiveGrid(
                     positions = currentPositions,
                     parentLayoutDirection = LayoutDirection.Ltr,
                     parentWidth = constraints.maxWidth,
-                    visibleRange = (firstVisibleItem?.index ?: 0)..(visibleItemsInfo.lastOrNull()?.index ?: 0),
-                    scrollOffset = finalFirstVisibleItemScrollOffset,
+                    // The items that intersect the viewport, not just those at or after the scroll anchor: the
+                    // anchor can still be unpositioned (for example right after scrolling to an item whose
+                    // height is not known yet) while the items that are on screen have lower indices.
+                    visibleRange = (mergedVisibleItemsInfo.firstOrNull()?.index ?: 0)..
+                        (mergedVisibleItemsInfo.lastOrNull()?.index ?: 0),
+                    scrollOffset = viewportStart,
                     parentHeight = constraints.maxHeight
                 ).placeChildren()
             }
@@ -430,11 +508,11 @@ fun <T> LazyAdaptiveGrid(
                 consumedScroll = consumedScroll,
                 measureResult = measureResult,
                 scrollBackAmount = scrollBackAmount,
-                remeasureNeeded = false,
+                remeasureNeeded = heightChanges.isNotEmpty(),
                 coroutineScope = coroutineScope,
                 density = density,
                 childConstraints = Constraints.fixedWidth(constraints.maxWidth),
-                visibleItemsInfo = visibleItemsInfo,
+                visibleItemsInfo = finalVisibleItemsInfo,
                 viewportStartOffset = viewportStart,
                 viewportEndOffset = viewportEnd,
                 totalItemsCount = itemsCount,
@@ -447,67 +525,78 @@ fun <T> LazyAdaptiveGrid(
         }
     }
 
-    LazyLayout(
-        itemProvider = { lazyLayoutItemProvider },
-        measurePolicy = measurePolicy,
-        prefetchState = state.prefetchState,
-        modifier = modifier
-            .clipToBounds()
-            .then(state.remeasurementModifier)
-            .then(state.awaitLayoutModifier)
-            .scrollableArea(
-                state = state,
-                orientation = Orientation.Vertical,
-                enabled = scrollEnable,
-                reverseScrolling = reverseDirection,
-                interactionSource = state.internalInteractionSource,
-            ),
-    )
+    CompositionLocalProvider(
+        LocalAdaptiveGridMeasureInvalidator provides state.measurementScopeInvalidator,
+    ) {
+        LazyLayout(
+            itemProvider = { lazyLayoutItemProvider },
+            measurePolicy = measurePolicy,
+            prefetchState = state.prefetchState,
+            modifier = modifier
+                .clipToBounds()
+                .then(state.remeasurementModifier)
+                .then(state.awaitLayoutModifier)
+                .scrollableArea(
+                    state = state,
+                    orientation = Orientation.Vertical,
+                    enabled = scrollEnable,
+                    reverseScrolling = reverseDirection,
+                    interactionSource = state.internalInteractionSource,
+                ),
+        )
+    }
 
     DisposableEffect(Unit) {
         onDispose {
             widthCache.clear()
             positionCache.clear()
-            measuredHeights.clear()
+            heightCache.clear()
             positionsState.value = emptyList()
+            state.layoutProvider = null
 
             clearMeasurementCaches()
         }
     }
 }
 
-/** Returns a conservative index range to measure around the current scroll position. */
-private fun calculateVisibleRangeFromRelativePosition(
-    firstVisibleItemIndex: Int,
-    firstVisibleItemScrollOffset: Int,
-    itemCount: Int,
-    bufferSize: Int,
-    viewportHeight: Int,
-    lastMeasuredIndex: Int = -1,
-): IntRange {
-    if (itemCount == 0) return IntRange.EMPTY
-    
-    val start = maxOf(0, firstVisibleItemIndex - bufferSize)
-    
-    val estimatedItemsForViewport = (viewportHeight / 100).coerceAtLeast(20)
-    val forwardBuffer = maxOf(
-        bufferSize * 10,
-        estimatedItemsForViewport * 3
+/** Uses the latest measured height when layout position height is not yet available. */
+private fun normalizedItemSize(
+    index: Int,
+    position: ItemPosition,
+    measuredHeights: Map<Int, Int>,
+): Int = maxOf(position.height, measuredHeights[index] ?: 0)
+
+private fun <T> buildAdaptiveGridItemInfo(
+    index: Int,
+    position: ItemPosition,
+    normalizedSize: Int,
+    viewportStart: Int,
+    enrichedItems: List<EnrichedGridItem<T>>,
+): AdaptiveGridItemInfo {
+    val normalizedPosition =
+        if (normalizedSize != position.height) {
+            position.copy(height = normalizedSize)
+        } else {
+            position
+        }
+    return AdaptiveGridItemInfo(
+        index = index,
+        key = enrichedItems.getOrNull(index)?.key ?: index,
+        offset = normalizedPosition.y - viewportStart,
+        size = normalizedSize,
+        position = normalizedPosition,
+        layoutType = enrichedItems.getOrNull(index)?.config?.type ?: GridItemType.Staggered,
     )
-    
-    val endFromFirst = firstVisibleItemIndex + forwardBuffer
-    val endFromLast = if (lastMeasuredIndex >= 0) {
-        lastMeasuredIndex + forwardBuffer
-    } else {
-        endFromFirst
-    }
-    val end = minOf(itemCount - 1, maxOf(endFromFirst, endFromLast))
-    
-    return start..end
 }
 
 @OptIn(ExperimentalFoundationApi::class)
-/** Measures items in the visible window (plus buffer) and returns placeables and heights. */
+/**
+ * Visits the items in [visibleRange] (plus [bufferSize] on each side) and returns placeables and heights.
+ *
+ * Items in [freshRange] are always composed and measured and their placeables are returned. Any other
+ * visited item reuses its cached height, and is only composed and measured (without keeping the
+ * placeable) when it has no height yet.
+ */
 internal fun <T> measureGridItems(
     layoutProvider: GridLayoutProvider<T>,
     enrichedItems: List<EnrichedGridItem<T>>,
@@ -517,6 +606,7 @@ internal fun <T> measureGridItems(
     measurer: (Int, Constraints) -> List<Placeable>,
     bufferSize: Int,
     getCachedWidth: (GridItemConfig, Int, Int) -> Int,
+    freshRange: IntRange = visibleRange,
 ): Triple<List<Placeable?>, List<Int>, List<Pair<Int, Int>>> {
 
     val itemCount = layoutProvider.itemCount
@@ -547,7 +637,7 @@ internal fun <T> measureGridItems(
         val config = enrichedItems[index].config
         val groupColumns = enrichedItems[index].groupColumns
         
-        val isVisible = index in visibleRange
+        val isFresh = index in freshRange
 
         val itemWidth = getCachedWidth(config, groupColumns, constraints.maxWidth)
 
@@ -557,32 +647,30 @@ internal fun <T> measureGridItems(
         }
 
         val cachedHeight = measuredHeights[index]
-        val itemHeight = if (cachedHeight != null && cachedHeight > 0 && !isVisible) {
+        val itemHeight = if (cachedHeight != null && cachedHeight > 0 && !isFresh) {
             cachedHeight
         } else {
-            val measurementResult = measurer(index, heightConstraint)
-            if (measurementResult.isNotEmpty()) {
-                val placeable = measurementResult.first()
-                if (isVisible) {
-                    placeables[index] = placeable
-                }
-                val newHeight = placeable.height
-                val oldHeight = measuredHeights[index] ?: 0
-                if (newHeight > 0) {
-                    measuredHeights[index] = newHeight
-                }
-                if (newHeight != oldHeight) {
-                    heightChanges.add(index to (newHeight - oldHeight))
-                }
-                newHeight
-            } else {
-                0
+            val placeable = measurer(index, heightConstraint).firstOrNull()
+            if (isFresh && placeable != null) {
+                placeables[index] = placeable
             }
+            // A fresh measurement is authoritative. A block that now renders nothing (no nodes, or a
+            // zero-height node while it loads again) collapses instead of keeping its previous height
+            // as a blank gap; once it reports a height again it is shown in place.
+            val newHeight = placeable?.height ?: 0
+            val oldHeight = measuredHeights[index] ?: 0
+            if (newHeight > 0) {
+                measuredHeights[index] = newHeight
+            } else {
+                measuredHeights.remove(index)
+            }
+            if (newHeight != oldHeight) {
+                heightChanges.add(index to (newHeight - oldHeight))
+            }
+            newHeight
         }
 
-        if (itemHeight > 0) {
-            itemHeights[index] = itemHeight
-        }
+        itemHeights[index] = itemHeight
     }
     
     return Triple(placeables, itemHeights, heightChanges)

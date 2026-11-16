@@ -248,6 +248,29 @@ class AdaptiveGridScrollDeltaBetweenPassesTest {
     }
 
     @Test
+    fun updateScrollDeltaForApproach_nonFiniteDelta_doesNothing() = runTest {
+        val state = AdaptiveGridScrollDeltaBetweenPasses()
+        val density = Density(1f)
+        val frameClock = ManualFrameClock()
+        val scope = CoroutineScope(coroutineContext + frameClock)
+
+        state.updateScrollDeltaForApproach(
+            delta = Float.POSITIVE_INFINITY,
+            density = density,
+            coroutineScope = scope,
+        )
+        state.updateScrollDeltaForApproach(
+            delta = Float.NaN,
+            density = density,
+            coroutineScope = scope,
+        )
+
+        assertNull(state.job)
+        assertEquals(0f, state.scrollDeltaBetweenPasses, 0f)
+        assertFalse(state.isActive)
+    }
+
+    @Test
     fun stop_cancelsJob_andResetsDeltaToZero_andRemainsZeroAfterMoreFrames() = runTest {
         val state = AdaptiveGridScrollDeltaBetweenPasses()
         val density = Density(1f)

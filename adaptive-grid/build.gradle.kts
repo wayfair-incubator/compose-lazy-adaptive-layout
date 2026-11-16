@@ -49,14 +49,20 @@ android {
 }
 
 // Vanniktech Maven Publish Plugin Configuration
+val publishToMavenLocalOnly = gradle.startParameter.taskNames.any {
+    it.contains("MavenLocal", ignoreCase = true)
+}
+
 mavenPublishing {
-    coordinates("com.wayfair", "lazy-adaptive-grid", "1.0.0")
+    coordinates("com.wayfair", "lazy-adaptive-grid", "1.1.0")
  
     // Publish to Maven Central (Central Portal)
     publishToMavenCentral(automaticRelease = true, validateDeployment = false)
 
-    // Sign all publications (required by Central)
-    signAllPublications()
+    // Signing is required by Maven Central but not for publishToMavenLocal.
+    if (!publishToMavenLocalOnly) {
+        signAllPublications()
+    }
  
     pom {
         name.set("LazyAdaptiveLayout")

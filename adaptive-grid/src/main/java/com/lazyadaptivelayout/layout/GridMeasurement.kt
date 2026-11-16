@@ -10,13 +10,17 @@ import com.lazyadaptivelayout.model.ItemPosition
 import kotlin.math.min
 import kotlin.math.max
 
-/** Returns an approximate "padding-only" height for an item. */
+/**
+ * Returns the maximum height an item would have if it rendered zero-height content.
+ * Must match the padding actually applied by [AdaptiveGridScopeImpl.wrapContentWithSpacing]:
+ *   topPadding  = edgeSpacing.top  (when index < columns, worst-case)
+ *   bottomPadding = contentPadding.vertical / 2
+ */
 private fun calculateExpectedPaddingHeight(config: GridItemConfig, density: Density): Int {
     val topPadding = with(density) { config.edgeSpacing.top.toPx().toInt() }
-    val bottomPadding = with(density) { config.edgeSpacing.bottom.toPx().toInt() }
-    val contentTopPadding = with(density) { config.contentPadding.vertical.toPx().toInt() }
+    val bottomPadding = with(density) { (config.contentPadding.vertical / 2).toPx().toInt() }
 
-    return topPadding + bottomPadding + (contentTopPadding / 2 + 1)
+    return topPadding + bottomPadding
 }
 
 private var cachedPositions: List<ItemPosition>? = null
@@ -43,6 +47,18 @@ internal fun clearMeasurementCaches() {
     cachedWidth = -1
     cachedItemCount = -1
     cachedDataVersion = Int.MIN_VALUE
+}
+
+/** Drops cached positions so the next layout is computed from the current heights. */
+internal fun invalidatePositionCache() {
+    cachedPositions = null
+}
+
+/** Drops cached positions when item heights changed so layout is recomputed from scratch. */
+internal fun invalidatePositionCacheIfHeightsChanged(heightChanges: List<Pair<Int, Int>>) {
+    if (heightChanges.isNotEmpty()) {
+        cachedPositions = null
+    }
 }
 
 /**
@@ -248,11 +264,12 @@ private fun <T> shouldStartNewRow(
  * Get the column count needed for an item type
  */
 private fun <T> getColumnCount(item: EnrichedGridItem<T>, maxPossibleColumns: Int): Int {
+    val safeMaxColumns = maxPossibleColumns.coerceAtLeast(1)
     return when (item.config.type) {
-        is GridItemType.Custom -> maxPossibleColumns
+        is GridItemType.Custom -> safeMaxColumns
         is GridItemType.FullWidth -> 1
-        is GridItemType.Staggered -> item.groupColumns
-        is GridItemType.Uniform -> item.groupColumns
+        is GridItemType.Staggered -> item.groupColumns.coerceAtLeast(1)
+        is GridItemType.Uniform -> item.groupColumns.coerceAtLeast(1)
     }
 }
 
@@ -463,13 +480,9 @@ private fun <T> positionCustomItem(
     maxPossibleColumns: Int
 ) {
     val arrayHeight = allItemHeights[index]
-    val configHeight = item.config.height
-    
-    val finalItemHeight = if (arrayHeight <= 0 && configHeight != null) {
-        configHeight
-    } else {
-        arrayHeight
-    }
+    // Only use measured height for positioning. Do not reserve space from config.height before
+    // the item is composed — async blocks should collapse until their content is ready.
+    val finalItemHeight = arrayHeight
     
     val customType = item.config.type as GridItemType.Custom
     val spans = min(customType.spans, maxPossibleColumns)

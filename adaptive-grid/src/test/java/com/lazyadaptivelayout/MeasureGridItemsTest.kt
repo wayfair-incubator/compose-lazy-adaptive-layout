@@ -254,6 +254,149 @@ class MeasureGridItemsTest {
         assertTrue(heightChanges.contains(indexToChange to 10))
     }
 
+    private fun zeroHeightNodeMeasurer(index: Int, constraints: Constraints): List<Placeable> =
+        listOf(FakePlaceable(constraints.maxWidth, 0))
+
+    @Test
+    fun block_that_goes_back_to_loading_with_zero_height_node_collapses() {
+        val itemCount = 4
+        val provider = fakeProvider<Any>(itemCount)
+        val enriched = buildEnriched(List(itemCount) { SimpleEnriched(item = Any(), columns = 1) })
+        val measuredHeights = mutableMapOf(1 to 30)
+
+        val (placeables, heights, heightChanges) = measureGridItems(
+            layoutProvider = provider,
+            enrichedItems = enriched,
+            visibleRange = 1..1,
+            measuredHeights = measuredHeights,
+            constraints = Constraints(maxWidth = 200, maxHeight = 10_000),
+            measurer = ::zeroHeightNodeMeasurer,
+            bufferSize = 0,
+            getCachedWidth = defaultWidthFn
+        )
+
+        // The previous 30px must not be reserved as a blank gap while the block has nothing to show.
+        assertEquals(0, heights[1])
+        assertTrue("collapsed block must drop its cached height", 1 !in measuredHeights)
+        assertTrue(heightChanges.contains(1 to -30))
+        assertTrue(placeables[1] != null)
+    }
+
+    @Test
+    fun block_that_goes_back_to_loading_without_nodes_collapses() {
+        val itemCount = 4
+        val provider = fakeProvider<Any>(itemCount)
+        val enriched = buildEnriched(List(itemCount) { SimpleEnriched(item = Any(), columns = 1) })
+        val measuredHeights = mutableMapOf(1 to 30, 2 to 40)
+        // Block 1 now composes nothing; block 2 is unchanged.
+        val scope = RecordingMeasurer(mapOf(2 to 40))
+
+        val (placeables, heights, heightChanges) = measureGridItems(
+            layoutProvider = provider,
+            enrichedItems = enriched,
+            visibleRange = 1..2,
+            measuredHeights = measuredHeights,
+            constraints = Constraints(maxWidth = 200, maxHeight = 10_000),
+            measurer = scope::measure,
+            bufferSize = 0,
+            getCachedWidth = defaultWidthFn
+        )
+
+        assertEquals(0, heights[1])
+        assertEquals(40, heights[2])
+        assertTrue(1 !in measuredHeights)
+        assertEquals(40, measuredHeights[2])
+        assertEquals(listOf(1 to -30), heightChanges)
+        assertTrue(placeables[1] == null)
+    }
+
+    @Test
+    fun collapse_is_reported_once_so_remeasure_does_not_loop() {
+        val itemCount = 3
+        val provider = fakeProvider<Any>(itemCount)
+        val enriched = buildEnriched(List(itemCount) { SimpleEnriched(item = Any(), columns = 1) })
+        val measuredHeights = mutableMapOf(1 to 30)
+        val scope = RecordingMeasurer(emptyMap())
+
+        fun pass() = measureGridItems(
+            layoutProvider = provider,
+            enrichedItems = enriched,
+            visibleRange = 1..1,
+            measuredHeights = measuredHeights,
+            constraints = Constraints(maxWidth = 200, maxHeight = 10_000),
+            measurer = scope::measure,
+            bufferSize = 0,
+            getCachedWidth = defaultWidthFn
+        )
+
+        assertEquals(listOf(1 to -30), pass().third)
+        // The block is still loading: nothing changed, so no further remeasure is requested.
+        assertTrue(pass().third.isEmpty())
+        assertTrue(pass().third.isEmpty())
+    }
+
+    @Test
+    fun collapsed_block_is_shown_in_place_once_content_arrives() {
+        val itemCount = 3
+        val provider = fakeProvider<Any>(itemCount)
+        val enriched = buildEnriched(List(itemCount) { SimpleEnriched(item = Any(), columns = 1) })
+        val measuredHeights = mutableMapOf(1 to 30)
+        val constraints = Constraints(maxWidth = 200, maxHeight = 10_000)
+
+        measureGridItems(
+            layoutProvider = provider,
+            enrichedItems = enriched,
+            visibleRange = 1..1,
+            measuredHeights = measuredHeights,
+            constraints = constraints,
+            measurer = RecordingMeasurer(emptyMap())::measure,
+            bufferSize = 0,
+            getCachedWidth = defaultWidthFn
+        )
+        assertTrue(1 !in measuredHeights)
+
+        // The block's content arrives with a different height than before.
+        val (placeables, heights, heightChanges) = measureGridItems(
+            layoutProvider = provider,
+            enrichedItems = enriched,
+            visibleRange = 1..1,
+            measuredHeights = measuredHeights,
+            constraints = constraints,
+            measurer = RecordingMeasurer(mapOf(1 to 55))::measure,
+            bufferSize = 0,
+            getCachedWidth = defaultWidthFn
+        )
+
+        assertEquals(55, heights[1])
+        assertEquals(55, measuredHeights[1])
+        assertEquals(listOf(1 to 55), heightChanges)
+        assertTrue(placeables[1] != null)
+    }
+
+    @Test
+    fun offscreen_cached_block_is_not_collapsed_without_a_fresh_measurement() {
+        val itemCount = 6
+        val provider = fakeProvider<Any>(itemCount)
+        val enriched = buildEnriched(List(itemCount) { SimpleEnriched(item = Any(), columns = 1) })
+        val measuredHeights = mutableMapOf(0 to 30)
+        val scope = RecordingMeasurer(emptyMap())
+
+        val (_, heights, heightChanges) = measureGridItems(
+            layoutProvider = provider,
+            enrichedItems = enriched,
+            visibleRange = 3..4,
+            measuredHeights = measuredHeights,
+            constraints = Constraints(maxWidth = 200, maxHeight = 10_000),
+            measurer = scope::measure,
+            bufferSize = 0,
+            getCachedWidth = defaultWidthFn
+        )
+
+        assertEquals(30, heights[0])
+        assertEquals(30, measuredHeights[0])
+        assertTrue(heightChanges.none { it.first == 0 })
+    }
+
     @Test
     fun preserves_previous_heights_outside_window() {
         val itemCount = 12

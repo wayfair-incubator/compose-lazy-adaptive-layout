@@ -314,14 +314,14 @@ repositories {
 Kotlin DSL (build.gradle.kts):
 ```
 dependencies {
-    implementation("com.wayfair:lazy-adaptive-grid:1.0.0")
+    implementation("com.wayfair:lazy-adaptive-grid:1.1.0")
 }
 ```
 
 Groovy DSL (build.gradle):
 ```
 dependencies {
-    implementation 'com.wayfair:lazy-adaptive-grid:1.0.0'
+    implementation 'com.wayfair:lazy-adaptive-grid:1.1.0'
 }
 ```
 

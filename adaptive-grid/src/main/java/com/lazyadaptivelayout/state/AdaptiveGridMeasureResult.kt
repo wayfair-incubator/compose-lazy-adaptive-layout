@@ -48,6 +48,7 @@ internal class AdaptiveGridMeasureResult(
 
     private val layoutInfo: AdaptiveGridLayoutInfo = AdaptiveGridLayoutInfo(
         visibleItemsInfo = visibleItemsInfo,
+        firstVisibleItem = firstVisibleItem,
         viewportStartOffset = viewportStartOffset,
         viewportEndOffset = viewportEndOffset,
         totalItemsCount = totalItemsCount,
@@ -95,10 +96,18 @@ internal class AdaptiveGridMeasureResult(
                     layoutType = item.layoutType
                 )
             }
+            val updatedFirstVisibleItem = AdaptiveGridItemInfo(
+                index = firstVisibleItem.index,
+                key = firstVisibleItem.key,
+                offset = firstVisibleItem.offset - delta,
+                size = firstVisibleItem.size,
+                position = firstVisibleItem.position.copy(y = firstVisibleItem.position.y - delta),
+                layoutType = firstVisibleItem.layoutType,
+            )
             val rawOffset = firstVisibleItemScrollOffset - delta
             val newScrollOffset = rawOffset.coerceAtLeast(0)
             AdaptiveGridMeasureResult(
-                firstVisibleItem = firstVisibleItem,
+                firstVisibleItem = updatedFirstVisibleItem,
                 firstVisibleItemScrollOffset = newScrollOffset,
                 canScrollForward =
                     canScrollForward ||

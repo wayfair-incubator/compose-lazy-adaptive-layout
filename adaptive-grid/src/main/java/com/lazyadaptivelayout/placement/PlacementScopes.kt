@@ -28,19 +28,16 @@ class LazySimplePlacementScope(
 ) : Placeable.PlacementScope() {
 
     fun placeChildren() {
-        // Only place visible items that have been measured
         for (index in visibleRange) {
             val placeable = allPlaceables.getOrNull(index)
             val position = positions.getOrNull(index)
 
             if (placeable != null && position != null) {
+                if (position.x == 0 && position.y == 0 && position.width == 0 && position.height == 0) continue
+
                 val adjustedY = position.y - scrollOffset
                 
-                // Only place items that are within viewport bounds
-                // Don't allow items to be placed above viewport (prevents overlapping)
-                // Allow partial visibility at bottom by checking if item overlaps with viewport
                 val itemBottom = adjustedY + placeable.height
-                // Place item if it overlaps the viewport: allow negative adjustedY for partial top visibility
                 if (itemBottom > 0 && adjustedY < parentHeight) {
                     if (onPlace != null) {
                         onPlace.invoke(index, placeable, position)

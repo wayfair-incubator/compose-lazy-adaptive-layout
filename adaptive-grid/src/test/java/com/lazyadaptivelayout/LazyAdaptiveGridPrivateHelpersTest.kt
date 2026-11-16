@@ -21,118 +21,12 @@ class LazyAdaptiveGridPrivateHelpersTest {
     @get:Rule
     val composeTestRule = createComposeRule()
 
-    private fun calculateVisibleRange(
-        firstVisibleItemIndex: Int,
-        firstVisibleItemScrollOffset: Int,
-        itemCount: Int,
-        bufferSize: Int,
-        viewportHeight: Int,
-        lastMeasuredIndex: Int,
-    ): IntRange {
-        val clazz = Class.forName("com.lazyadaptivelayout.LazyAdaptiveGridKt")
-        val method = clazz.getDeclaredMethod(
-            "calculateVisibleRangeFromRelativePosition",
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-        )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        return method.invoke(
-            null,
-            firstVisibleItemIndex,
-            firstVisibleItemScrollOffset,
-            itemCount,
-            bufferSize,
-            viewportHeight,
-            lastMeasuredIndex,
-        ) as IntRange
-    }
-
     private fun <T> createLayoutProvider(enrichedItems: List<EnrichedGridItem<T>>): GridLayoutProvider<T> {
         val clazz = Class.forName("com.lazyadaptivelayout.LazyAdaptiveGridKt")
         val method = clazz.getDeclaredMethod("createLayoutProviderFromEnrichedItems", List::class.java)
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         return method.invoke(null, enrichedItems) as GridLayoutProvider<T>
-    }
-
-    @Test
-    fun calculateVisibleRange_itemCountZero_returnsEmpty() {
-        val range = calculateVisibleRange(
-            firstVisibleItemIndex = 0,
-            firstVisibleItemScrollOffset = 0,
-            itemCount = 0,
-            bufferSize = 2,
-            viewportHeight = 1000,
-            lastMeasuredIndex = -1,
-        )
-        assertTrue(range.isEmpty())
-    }
-
-    @Test
-    fun calculateVisibleRange_clampsStartAndEnd_expectedValues_withoutLastMeasuredIndex() {
-        val range = calculateVisibleRange(
-            firstVisibleItemIndex = 10,
-            firstVisibleItemScrollOffset = 0,
-            itemCount = 200,
-            bufferSize = 2,
-            viewportHeight = 1000,
-            lastMeasuredIndex = -1,
-        )
-
-        // viewportHeight=1000 => estimatedItemsForViewport=(1000/100)=10 => clamped to 20
-        // forwardBuffer=maxOf(buffer*10=20, estimated*3=60)=60
-        // start=maxOf(0, 10-2)=8, end=minOf(199, 10+60)=70
-        assertEquals(8, range.first)
-        assertEquals(70, range.last)
-        assertTrue(!range.isEmpty())
-    }
-
-    @Test
-    fun calculateVisibleRange_usesLastMeasuredIndex_toExtendForward() {
-        val range = calculateVisibleRange(
-            firstVisibleItemIndex = 10,
-            firstVisibleItemScrollOffset = 0,
-            itemCount = 200,
-            bufferSize = 2,
-            viewportHeight = 1000,
-            lastMeasuredIndex = 150,
-        )
-
-        // With lastMeasuredIndex=150 and forwardBuffer=60 => endFromLast=210, clamped to 199.
-        assertEquals(8, range.first)
-        assertEquals(199, range.last)
-    }
-
-    @Test
-    fun calculateVisibleRange_handlesNegativeFirstVisibleIndex_withoutCrashing() {
-        val range = calculateVisibleRange(
-            firstVisibleItemIndex = -10,
-            firstVisibleItemScrollOffset = 0,
-            itemCount = 100,
-            bufferSize = 2,
-            viewportHeight = 1000,
-            lastMeasuredIndex = -1,
-        )
-        assertEquals(0, range.first)
-        assertTrue(range.last in 0..99)
-    }
-
-    @Test
-    fun calculateVisibleRange_negativeBuffer_canProduceEmptyRange_butDoesNotCrash() {
-        val range = calculateVisibleRange(
-            firstVisibleItemIndex = 9,
-            firstVisibleItemScrollOffset = 0,
-            itemCount = 10,
-            bufferSize = -5,
-            viewportHeight = 1000,
-            lastMeasuredIndex = -1,
-        )
-        assertTrue(range.isEmpty())
     }
 
     @Test
